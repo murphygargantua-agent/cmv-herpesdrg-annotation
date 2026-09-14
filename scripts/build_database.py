@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""
+build_database.py - Rebuild the CMV HerpesDRG vcfanno database.
+
+Usage:
+    python build_database.py --herpesdrg herpesdrg-db.tsv \\
+                             --genome AD169.fasta \\
+                             --genbank AD169_annotation.gb \\
+                             --output herpesdrg_cmv.bed
+
+Downloads:
+    - HerpesDRG: https://github.com/ojcharles/herpesdrg-db/raw/main/herpesdrg-db.tsv
+    - AD169 genome: NCBI accession X17403.1 (via Entrez EFetch)
+    - AD169 annotation: NCBI accession AE016761 (via Entrez EFetch)
+"""
+
+import argparse
+import csv
+import re
+import os
+import sys
+from pathlib import Path
+
+from Bio import Entrez, SeqIO
+
+
+def parse_fasta(path: str) -> str:
+    """Extract genome sequence from FASTA file."""
+    seq = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('>'):
+                seq.append(line)
+    return ''.join(seq)
+
+
+def parse_ad169_coordinates(target_genes: list[str], genbank_path: str) -> dict:
+    """
+    Parse AD169 GenBank annotation to get gene coordinates.
+    Returns dict mapping gene name to {'start': int, 'end': int}.
+    """
+    with open(genbank_path) as f:
+        record = SeqIO.read(f, 'genbank')
+
+    gene_coords = {}
+    for feature in record.features:
+        if feature.type == "CDS" and "gene" in feature.qualifiers:
+            raw_gene = feature.qualifiers["gene"][0]
+            if raw_gene.startswith("HCMV"):
+                gene_name = raw_gene[4:].split()[0]
+            else:
+                gene_name = raw_gene.split()[0]
+
+            if gene_name in target_genes:
+                start = int(feature.location.start) + 1
+                end = int(feature.location.end)
+                length = end - start + 1
+
+                if gene_name not in gene_coords or \
+                   length > gene_coords[gene_name]['end'] - gene_coords[gene_name]['start'] + 1:
+                    gene_coords[gene_name] = {
+                        'start': start,
+                        'end': end,
+                        'length': length
+                    }
+
+    return gene_coords
+
+
+def build_database(herpesdrg_path: str, genome_path: str,
+                   genbank_path: str, output_path: str,
+                   target_genes: list[str]) -> tuple[int, int]:
+    """
+    Build CMV mutation database from HerpesDRG TSV.
+
+    Args:
+        herpesdrg_path: Path to herpesdrg-db.tsv
+        genome_path: Path to AD169 FASTA
+        genbank_path: Path to AD169 GenBank annotation
+        output_path: Output BED file path
+        target_genes: List of gene names to include
+
+    Returns:
+        (mapped_count, unmapped_count)
+    """
+    # Parse genome
+    genome_seq = parse_fasta(genome_path)
+    print(f"Genome: {len(genome_seq)} bp")
+
+    # Parse gene coordinates
+    print("Parsing GenBank annotations...")
+    gene_coords = parse_ad169_coordinates(target_genes, genbank_path)
+    print(f"Found {len(gene_coords)} genes:")
+    for gene in sorted(gene_coords.keys()):
+        coords = gene_coords[gene]
+        print(f"  {gene}: {coords['start']}-{coords['end']} ({coords['length']} bp)")
+
+    # Parse HerpesDRG TSV
+    print("\nLoading HerpesDRG TSV...")
+    with open(herpesdrg_path) as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        rows = list(reader)
+
+    print(f"Total rows: {len(rows)}")
+    target_rows = [r for r in rows if r['gene'] in target_genes]
+    print(f"Target gene rows: {len(target_rows)}")
+
+    # Build mutation list
+    print("\nBuilding mutation list...")
+    cmv_mutations = []
+    unmapped = 0
+    unparsed = 0
+
+    for row in target_rows:
+        gene = row['gene']
+        aa_change = row['aa_change']
+
+        # Parse aa_change format: RefPosMut (e.g., D301N = D at pos 301 -> N)
+        match = re.match(r'^([A-Z])(\d+)([A-Z])$', aa_change)
+        if not match:
+            unparsed += 1
+            continue
+
+        ref_aa = match.group(1)
+        pos = int(match.group(2))
+        mut_aa = match.group(3)
+
+        if gene not in gene_coords:
+            unmapped += 1
+            continue
+
+        coords = gene_coords[gene]
+        if pos < 1 or pos > coords['length']:
+            unmapped += 1
+            continue
+
+        genomic_pos = coords['start'] + pos - 1
+
+        # Build drug resistance info string
+        drug_info = []
+        for drug in ['Ganciclovir', 'Aciclovir', 'Cidofovir', 'Foscarnet',
+                     'Brincidofovir', 'Letermovir', 'Maribavir']:
+            val = row.get(drug, '')
+            if val and str(val).strip():
+                drug_info.append(f"{drug}={val}")
+
+        # Label format: GENE_AA_CHANGE|Drug1=val1;Drug2=val2
+        label = f"{gene}_{aa_change}"
+        if drug_info:
+            label += '|' + ';'.join(drug_info)
+
+        chrom = '1'  # AD169 uses '1' as chromosome identifier
+        cmv_mutations.append({
+            'chrom': chrom,
+            'start': genomic_pos,
+            'end': genomic_pos + 1,
+            'label': label
+        })
+
+    # Write BED file
+    print(f"\nMapped: {len(cmv_mutations)}")
+    print(f"Unparsed aa_change: {unparsed}")
+    print(f"Unmapped: {unmapped}")
+
+    with open(output_path, 'w') as f:
+        f.write("##bedFormat=4\n")
+        for m in cmv_mutations:
+            f.write(f"{m['chrom']}\t{m['start']}\t{m['end']}\t{m['label']}\n")
+
+    print(f"\nWrote {len(cmv_mutations)} mutations to {output_path}")
+
+    return len(cmv_mutations), unmapped + unparsed
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Build CMV HerpesDRG vcfanno database"
+    )
+    parser.add_argument(
+        '--herpesdrg',
+        required=True,
+        dest='herp',
+        help='Path to herpesdrg-db.tsv'
+    )
+    parser.add_argument(
+        '--genome', '-g',
+        required=True,
+        help='Path to AD169 FASTA genome'
+    )
+    parser.add_argument(
+        '--genbank', '-b',
+        required=True,
+        help='Path to AD169 GenBank annotation'
+    )
+    parser.add_argument(
+        '--output', '-o',
+        required=True,
+        help='Output BED file path'
+    )
+
+    args = parser.parse_args()
+
+    target_genes = ["UL97", "UL54", "UL27", "UL56", "UL51", "UL89"]
+    mapped, unmapped = build_database(
+        args.herp,
+        args.genome,
+        args.genbank,
+        args.output,
+        target_genes,
+    )
+
+
+if __name__ == "__main__":
+    main()
