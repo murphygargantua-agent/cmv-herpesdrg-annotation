@@ -1,5 +1,5 @@
 [[annotation]]
 file = "herpesdrg_cmv.bed.gz"
-fields = ["name"]
+columns = [4]
 names = ["cmv_resistance"]
 ops = ["self"]
