@@ -8,5 +8,8 @@ data/herpesdrg_cmv_sorted.bed
 data/herpesdrg_cmv.bed.merged
 data/AD169.fasta
 data/AD169.gb
-data/AD169_X17403.gb
+data/AD169_NC_006273.gb
+data/NC_006273.gb
 test_cmv_herpesdrg.vcf
+test_refalt*
+tmp/
