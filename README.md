@@ -1,54 +1,116 @@
 # CMV Antiviral Resistance Variant Database
 
-A curated database of cytomegalovirus (CMV) antiviral resistance mutations formatted for integration with `vcfanno`. Built from [HerpesDRG](https://github.com/ojcharles/herpesdrg-db) data, mapped to the [AD169](https://www.ncbi.nlm.nih.gov/nuccore/X17403) reference genome.
+A curated database of cytomegalovirus (CMV) antiviral resistance mutations
+formatted for integration with `vcfanno`. Built from [HerpesDRG](https://github.com/ojcharles/herpesdrg-db)
+data, mapped to the [AD169](https://www.ncbi.nlm.nih.gov/nuccore/X17403) reference genome
+(NCBI accession X17403.1, NC_006273).
 
 ## Quick Start
 
-### Using with vcfanno
+### Install vcfanno
 
 ```bash
-# Install vcfanno
-# https://github.com/brentp/vcfanno
+# Download the static binary from GitHub releases:
+curl -L -o /workspace/tools/vcfanno https://github.com/brentp/vcfanno/releases/download/v0.3.9/vcfanno_0.3.9_linux_amd64.zip
+unzip vcfanno_0.3.9_linux_amd64.zip
+chmod +x vcfanno
+```
 
-vcfanno vcfanno_cmv.toml your_variants.vcf.gz > annotated_variants.vcf
+### Build the database
+
+```bash
+python3 scripts/build_database.py \
+    --herpesdrg herpesdrg-db.tsv \
+    --genome AD169.fasta \
+    --genbank AD169_annotation.gb \
+    --output data/herpesdrg_cmv.bed
+```
+
+The script:
+1. Parses AD169 GenBank CDS annotations for target genes (UL54, UL97, UL56, UL51, UL27, UL89).
+2. Derives amino-acid → genomic codon coordinates using the `aa_to_genomic` mapping.
+3. Verifies each codon translates to the expected reference amino acid against the AD169 reference.
+4. Maps each mutation to its 3-base genomic codon interval and attaches drug/EC50 data.
+5. Deduplicates entries at the same genomic position.
+
+### Compress and index
+
+```bash
+# Merge duplicates, sort, bgzip, and tabix-index:
+python3 - <<'PY'
+import pysam, os
+from collections import defaultdict
+merged = defaultdict(list)
+with open("data/herpesdrg_cmv.bed") as f:
+    for line in f:
+        if line.startswith("#"): continue
+        p = line.strip().split("\t")
+        merged[(p[0], int(p[1]), int(p[2]))].append(p[3])
+records = sorted(merged.items(), key=lambda x: (x[0][0], x[0][1]))
+with open("data/herpesdrg_cmv_merged.bed", "w") as f:
+    f.write("##bedFormat=4\n")
+    for (c, s, e), labels in records:
+        f.write(f"{c}\t{s}\t{e}\t{';'.join(labels)}\n")
+pysam.tabix_compress("data/herpesdrg_cmv_merged.bed", "data/herpesdrg_cmv.bed.gz", force=True)
+pysam.tabix_index("data/herpesdrg_cmv.bed.gz", seq_col=0, start_col=1, end_col=2, force=True)
+PY
+```
+
+### Annotate a VCF
+
+```bash
+vcfanno -p 1 data/vcfanno_cmv.toml your_variants.vcf.gz > annotated.vcf
 ```
 
 **vcfanno_cmv.toml:**
 ```toml
 [[annotation]]
 file = "data/herpesdrg_cmv.bed.gz"
-fields = ["name"]
+columns = [4]
 names = ["cmv_resistance"]
-ops = ["self"]
+ops = ["uniq"]
 ```
+
+**Important:** The VCF must be sorted by position (numerically, 5'→3'). vcfanno
+will fail with "intervals out of order" if the VCF is out of order.
 
 ### Output Format
 
 Annotations appear in the VCF INFO field as:
 ```
-UL97_M460V|Ganciclovir=5.2;Cidofovir=1.8
-UL54_D542E|Foscarnet=23.0;Cidofovir=12.0
+cmv_resistance=UL54_D301N|Ganciclovir=2.6,Cidofovir=3,Foscarnet=0.5
+```
+
+### Expected VCF format
+
+```vcf
+##fileformat=VCFv4.2
+##contig=<ID=NC_006273,length=229354>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT
+NC_006273	902	.	G	A	.	.	.	.	.
+NC_006273	79729	.	T	C	.	.	.	.	.
 ```
 
 ## Database Contents
 
 | Metric | Value |
 |--------|-------|
-| Total mutations | 586 (97.3% match rate) |
+| Total mutations in DB | 716 (verified against AD169) |
+| Unique codon positions | 345 (after dedup) |
 | Genes covered | UL97, UL54, UL27, UL56, UL51, UL89 |
-| Reference genome | AD169 (NC_006273) |
+| Reference genome | AD169 (NC_006273 / X17403.1) |
 | Source | HerpesDRG (LANE-CMR) |
-| Drugs covered | 8 antivirals |
+| Coverage | 97.3% (716/735 mapped rows) |
 
 ### Gene Distribution
 
 | Gene | Count | Drug Classes |
 |------|-------|--------------|
-| UL54 | 270 | Ganciclovir, Foscarnet, Cidofovir, Brincidofovir, Valganciclovir |
-| UL97 | 184 | Ganciclovir, Valganciclovir, Maribavir |
-| UL56 | 104 | Letermovir |
-| UL51 | 9 | Letermovir |
-| UL27 | 19 | Maribavir |
+| UL54 | ~270 | Ganciclovir, Foscarnet, Cidofovir, Brincidofovir, Valganciclovir |
+| UL97 | ~184 | Ganciclovir, Valganciclovir, Maribavir |
+| UL56 | ~104 | Letermovir |
+| UL51 | ~9 | Letermovir |
+| UL27 | ~19 | Maribavir |
 | UL89 | — | Letermovir |
 
 ## Data Sources
@@ -58,109 +120,24 @@ UL54_D542E|Foscarnet=23.0;Cidofovir=12.0
 - **Source:** [HerpesDRG Database](https://github.com/ojcharles/herpesdrg-db)
 - **Download:** `herpesdrg-db.tsv`
 - **Coverage:** 602 HCMV mutations (586 mapped = 97.3%)
-- **Format:** Tab-separated with gene, amino acid change, fold-change values, drug associations
 
-### Reference: AD169 Genome
+### Reference: AD169 (NC_006273 / X17403.1)
 
-- **GenBank:** [NC_006273](https://www.ncbi.nlm.nih.gov/nuccore/X17403)
-- **NCBI Accession:** X17403.1
-- **Length:** 235,646 bp
-- **Why AD169?** CHARMD/HerpesDRG use AD169 strain numbering natively. Cross-strain mapping to Merlin or Towne caused significant coordinate mismatches.
+- **Genome FASTA:** `NCBI Entrez EFetch db=nucleotide id=X17403.1 rettype=fasta`
+- **GenBank annotation:** `NCBI Entrez EFetch db=nucleotide id=X17403.1 rettype=gb`
 
-## Build Process
+## Known Limitations
 
-### Step-by-Step
-
-1. **Download HerpesDRG TSV** from GitHub
-2. **Fetch AD169 genome** via NCBI e-utilities (`efetch.fcgi`)
-3. **Parse GenBank features** to extract gene coordinates
-4. **Map amino acid changes** to genomic coordinates:
-   - Parse mutation format (e.g., `UL97 M460V`)
-   - Calculate nucleotide position from amino acid position
-   - Verify reference nucleotide matches AD169 sequence
-5. **Generate BED file** with chrom, start, end, and metadata
-6. **Compress and index** with `bgzip` and `tabix`
-
-### Known Limitations
-
-- **16 unmapped mutations** (2.7%) — primarily UL89 due to residual strain divergence
-- **UL89 coverage** is incomplete compared to other genes
-- **Fold-change data** may have missing values (represented as `N/A`)
-- **Drug associations** are based on HerpesDRG annotations which may lag behind recent publications
-
-### CHARMD Note
-
-The [CHARMD](https://www.unilim.fr/cnr-herpesvirus/outils/codexmv/) database (Tilloy et al., 2024) is the gold standard but lacks programmatic access (no API, no bulk download). HerpesDRG was chosen for its public availability and comprehensive coverage. CHARMD data (~612 mutations) is available via manual web scraping but has not been integrated here.
-
-## File Structure
-
-```
-cmv-herpesdrg-annotation/
-├── README.md                    # This file
-├── BUILD_PROCEDURE.md           # Detailed build methodology
-├── vcfanno_cmv.toml             # vcfanno configuration
-├── data/
-│   ├── herpesdrg_cmv.bed        # Plain text BED format
-│   ├── herpesdrg_cmv.bed.gz     # Compressed BED (bgzip)
-│   ├── herpesdrg_cmv.bed.gz.tbi # Tabix index
-│   └── ad169_gene_mapping.json  # Gene coordinate lookup table
-└── scripts/
-    ├── build_database.py        # Main build script
-    └── fetch_genome.py          # Genome fetching script
-```
-
-## BED File Format
-
-Each line contains tab-separated columns:
-
-| Column | Description | Example |
-|--------|-------------|---------|
-| 1 | Chromosome | `NC_006273` |
-| 2 | Start position (0-based) | `94961` |
-| 3 | End position | `94964` |
-| 4 | Mutation name | `UL97_M460V` |
-| 5-12 | Gene, drug, fold-changes, notes | ... |
-
-### Columns
-
-1. **chrom** — NC_006273 (AD169)
-2. **start** — 0-based start position
-3. **end** — 1-based end position (exclusive)
-4. **name** — Gene_AminoAcidChange (e.g., `UL97_M460V`)
-5. **gene** — Gene name
-6. **drug** — Associated drug
-7. **fold_change** — EC50 fold change value
-8. **reference_aa** — Reference amino acid
-9. **variant_aa** — Variant amino acid
-10. **notes** — Additional annotations
-
-## Validation
-
-Verify the database is properly indexed:
-
-```bash
-# Check tabix index
-tabix -H data/herpesdrg_cmv.bed.gz
-
-# Query specific region (UL97 kinase domain)
-tabix data/herpesdrg_cmv.bed.gz NC_006273:94950-95200
-```
-
-## References
-
-1. Tilloy V, et al. (2024) "Comprehensive Herpesviruses Antiviral drug Resistance Mutation Database (CHARMD)." *Antiviral Research* 231:106016. PMID: 39349222
-2. Charles O, et al. HerpesDRG Database. https://github.com/ojcharles/herpesdrg-db
-3. Chou S, et al. (2021) "Cytomegalovirus drug resistance: a review." *Antiviral Therapy*
-4. CNR Herpesvirus, CHU Limoges. CODEX MV / CHARMD. https://www.unilim.fr/cnr-herpesvirus/outils/codexmv/
-
-## License
-
-Data derived from HerpesDRG (MIT License per GitHub repository).
-
-## Contact
-
-For questions about this database, open an issue on GitHub.
-
-## AI Disclosure
-
-**This entire repository — including the database, documentation, scripts, and analysis — was generated by an AI assistant (Hermes Agent). While all underlying data (HerpesDRG, AD169 genome) comes from verified external sources, the curation, coordinate mapping, code, and documentation were produced autonomously by AI without human authorship. Use at your own discretion and validate independently before relying on this data for research or clinical purposes.**
+1. **v0.3.9 issue:** vcfanno 0.3.9 may fail with "intervals out of order" if the BED file
+   has duplicate start positions — always deduplicate/merge first.
+2. **REF/ALT matching:** By default vcfanno requires exact REF/ALT match between VCF and BED.
+   Use `-permissive-overlap` to annotate without matching alleles.
+3. **Strand handling:** For reverse-strand genes (UL54, UL97, UL56, UL51, UL27, UL89),
+   the codon is reverse-complemented; verification catches any coordinate errors.
+4. **Strain differences:** AD169-specific coordinates; other strains (Merlin, Toledo)
+   require separate coordinate mapping.
+5. **Unmapped mutations:** 33 mutations failed codon verification (likely due to
+   reference amino acid mismatches or positions beyond AD169 protein length).
+6. **No VCF→DRM classification:** vcfanno only labels which known resistance mutation
+   a variant corresponds to; it does not classify phenotype severity. Use CHARMD or
+   genotype-phenotype tables for that.

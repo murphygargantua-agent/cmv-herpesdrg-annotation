@@ -2,30 +2,32 @@
 """
 build_database.py - Rebuild the CMV HerpesDRG vcfanno database.
 
+Builds codon-aware BED entries by mapping amino-acid mutations to their
+genomic codon coordinates in the AD169 reference genome, using the
+aa_to_genomic mapping derived from the GenBank CDS translations.
+
 Usage:
-    python build_database.py --herpesdrg herpesdrg-db.tsv \\
-                             --genome AD169.fasta \\
-                             --genbank AD169_annotation.gb \\
+    python build_database.py --herpesdrg herpesdrg-db.tsv \
+                             --genome AD169.fasta \
+                             --genbank AD169_annotation.gb \
                              --output herpesdrg_cmv.bed
 
 Downloads:
     - HerpesDRG: https://github.com/ojcharles/herpesdrg-db/raw/main/herpesdrg-db.tsv
     - AD169 genome: NCBI accession X17403.1 (via Entrez EFetch)
-    - AD169 annotation: NCBI accession AE016761 (via Entrez EFetch)
+    - AD169 annotation: NCBI accession X17403.1 (via Entrez EFetch)
 """
 
 import argparse
 import csv
-import re
+import json
 import os
-import sys
-from pathlib import Path
-
-from Bio import Entrez, SeqIO
+import re
+from Bio import SeqIO
+from Bio.Seq import Seq
 
 
 def parse_fasta(path: str) -> str:
-    """Extract genome sequence from FASTA file."""
     seq = []
     with open(path) as f:
         for line in f:
@@ -35,109 +37,119 @@ def parse_fasta(path: str) -> str:
     return ''.join(seq)
 
 
-def parse_ad169_coordinates(target_genes: list[str], genbank_path: str) -> dict:
-    """
-    Parse AD169 GenBank annotation to get gene coordinates.
-    Returns dict mapping gene name to {'start': int, 'end': int}.
-    """
+def parse_genbank_cds(target_genes: list, genbank_path: str) -> dict:
+    """Parse GenBank CDS for target genes. Returns dict with gene name -> info."""
     with open(genbank_path) as f:
         record = SeqIO.read(f, 'genbank')
 
-    gene_coords = {}
+    gene_info = {}
     for feature in record.features:
         if feature.type == "CDS" and "gene" in feature.qualifiers:
             raw_gene = feature.qualifiers["gene"][0]
-            if raw_gene.startswith("HCMV"):
-                gene_name = raw_gene[4:].split()[0]
-            else:
-                gene_name = raw_gene.split()[0]
-
+            gene_name = raw_gene[4:].split()[0] if raw_gene.startswith("HCMV") else raw_gene.split()[0]
             if gene_name in target_genes:
-                start = int(feature.location.start) + 1
-                end = int(feature.location.end)
-                length = end - start + 1
+                start0 = int(feature.location.start)  # 0-based
+                end0 = int(feature.location.end)      # 0-based exclusive
+                strand = feature.location.strand
+                gene_info[gene_name] = {
+                    'start0': start0,
+                    'end0': end0,
+                    'strand': strand,
+                    'length': end0 - start0,
+                }
+    return gene_info
 
-                if gene_name not in gene_coords or \
-                   length > gene_coords[gene_name]['end'] - gene_coords[gene_name]['start'] + 1:
-                    gene_coords[gene_name] = {
-                        'start': start,
-                        'end': end,
-                        'length': length
-                    }
 
-    return gene_coords
+def codon_start_0based(gene_info: dict, aa_pos: int) -> int:
+    """
+    Compute 0-based genomic start of the codon for amino acid position P (1-based).
+
+    For forward strand: codon = gene_start0 + 3*(P-1)
+    For reverse strand: codon = gene_end0 - 3*P
+    """
+    start0 = gene_info['start0']
+    end0 = gene_info['end0']
+    strand = gene_info['strand']
+
+    if strand == 1:
+        return start0 + 3 * (aa_pos - 1)
+    else:
+        return end0 - 3 * aa_pos
+
+
+def verify_codon(genome: str, gene_info: dict, aa_pos: int, ref_aa: str) -> bool:
+    """Extract codon and verify it translates to ref_aa."""
+    start0 = codon_start_0based(gene_info, aa_pos)
+    if start0 < 0 or start0 + 3 > len(genome):
+        return False
+    codon_plus = genome[start0:start0 + 3]
+    if gene_info['strand'] == -1:
+        codon = str(Seq(codon_plus).reverse_complement())
+    else:
+        codon = codon_plus
+    return str(Seq(codon).translate()) == ref_aa
 
 
 def build_database(herpesdrg_path: str, genome_path: str,
                    genbank_path: str, output_path: str,
-                   target_genes: list[str]) -> tuple[int, int]:
-    """
-    Build CMV mutation database from HerpesDRG TSV.
+                   target_genes: list) -> tuple:
+    genome = parse_fasta(genome_path)
+    print(f"Genome: {len(genome)} bp")
 
-    Args:
-        herpesdrg_path: Path to herpesdrg-db.tsv
-        genome_path: Path to AD169 FASTA
-        genbank_path: Path to AD169 GenBank annotation
-        output_path: Output BED file path
-        target_genes: List of gene names to include
+    gene_info = parse_genbank_cds(target_genes, genbank_path)
+    print(f"Found {len(gene_info)} genes:")
+    for g in sorted(gene_info.keys()):
+        info = gene_info[g]
+        print(f"  {g}: 0-based {info['start0']}-{info['end0']} ({info['length']} bp) strand={info['strand']}")
 
-    Returns:
-        (mapped_count, unmapped_count)
-    """
-    # Parse genome
-    genome_seq = parse_fasta(genome_path)
-    print(f"Genome: {len(genome_seq)} bp")
+    # Load aa_to_genomic mapping
+    mapping_path = os.path.join(os.path.dirname(genbank_path), "ad169_gene_mapping.json")
+    if not os.path.exists(mapping_path):
+        mapping_path = "data/ad169_gene_mapping.json"
+    if not os.path.exists(mapping_path):
+        raise FileNotFoundError(f"aa_to_genomic mapping not found at {mapping_path}")
+    with open(mapping_path) as f:
+        aa_map = json.load(f)
 
-    # Parse gene coordinates
-    print("Parsing GenBank annotations...")
-    gene_coords = parse_ad169_coordinates(target_genes, genbank_path)
-    print(f"Found {len(gene_coords)} genes:")
-    for gene in sorted(gene_coords.keys()):
-        coords = gene_coords[gene]
-        print(f"  {gene}: {coords['start']}-{coords['end']} ({coords['length']} bp)")
-
-    # Parse HerpesDRG TSV
     print("\nLoading HerpesDRG TSV...")
     with open(herpesdrg_path) as f:
-        reader = csv.DictReader(f, delimiter='\t')
-        rows = list(reader)
-
+        rows = list(csv.DictReader(f, delimiter='\t'))
     print(f"Total rows: {len(rows)}")
-    target_rows = [r for r in rows if r['gene'] in target_genes]
+    target_rows = [r for r in rows if r.get('gene') in target_genes]
     print(f"Target gene rows: {len(target_rows)}")
 
-    # Build mutation list
     print("\nBuilding mutation list...")
-    cmv_mutations = []
+    mutations = []
     unmapped = 0
     unparsed = 0
+    verified = 0
+    failed_verify = 0
 
     for row in target_rows:
         gene = row['gene']
         aa_change = row['aa_change']
 
-        # Parse aa_change format: RefPosMut (e.g., D301N = D at pos 301 -> N)
         match = re.match(r'^([A-Z])(\d+)([A-Z])$', aa_change)
         if not match:
             unparsed += 1
             continue
+        ref_aa, pos, mut_aa = match.group(1), int(match.group(2)), match.group(3)
 
-        ref_aa = match.group(1)
-        pos = int(match.group(2))
-        mut_aa = match.group(3)
-
-        if gene not in gene_coords:
+        if gene not in gene_info:
             unmapped += 1
             continue
 
-        coords = gene_coords[gene]
-        if pos < 1 or pos > coords['length']:
+        if pos < 1 or pos > gene_info[gene]['length']:
             unmapped += 1
             continue
 
-        genomic_pos = coords['start'] + pos - 1
+        if not verify_codon(genome, gene_info[gene], pos, ref_aa):
+            failed_verify += 1
+            continue
 
-        # Build drug resistance info string
+        start0 = codon_start_0based(gene_info[gene], pos)
+        chrom = 'NC_006273'
+
         drug_info = []
         for drug in ['Ganciclovir', 'Aciclovir', 'Cidofovir', 'Foscarnet',
                      'Brincidofovir', 'Letermovir', 'Maribavir']:
@@ -145,70 +157,66 @@ def build_database(herpesdrg_path: str, genome_path: str,
             if val and str(val).strip():
                 drug_info.append(f"{drug}={val}")
 
-        # Label format: GENE_AA_CHANGE|Drug1=val1;Drug2=val2
+        # Label: GENE_AA_CHANGE|Drug1=val1;Drug2=val2
         label = f"{gene}_{aa_change}"
         if drug_info:
             label += '|' + ';'.join(drug_info)
 
-        chrom = '1'  # AD169 uses '1' as chromosome identifier
-        cmv_mutations.append({
+        # Bed entry: codon-spanning 3-base interval (start0, start0+3)
+        mutations.append({
             'chrom': chrom,
-            'start': genomic_pos,
-            'end': genomic_pos + 1,
-            'label': label
+            'start': start0,
+            'end': start0 + 3,
+            'label': label,
         })
+        verified += 1
 
-    # Write BED file
-    print(f"\nMapped: {len(cmv_mutations)}")
-    print(f"Unparsed aa_change: {unparsed}")
+    # Sort by chrom then start
+    mutations.sort(key=lambda m: (m['chrom'], m['start']))
+
+    # Merge entries at the same genomic position (same codon, different mutations/drugs)
+    merged = {}
+    for m in mutations:
+        key = (m['chrom'], m['start'], m['end'])
+        if key not in merged:
+            merged[key] = [m['label']]
+        else:
+            merged[key].append(m['label'])
+    # Deduplicate within each key
+    for key in merged:
+        seen = set()
+        labels = []
+        for l in merged[key]:
+            if l not in seen:
+                seen.add(l)
+                labels.append(l)
+        merged[key] = labels
+
+    print(f"\nMapped/verified: {verified}")
     print(f"Unmapped: {unmapped}")
+    print(f"Unparsed: {unparsed}")
+    print(f"Failed codon verify: {failed_verify}")
+    print(f"Unique positions: {len(merged)} (from {len(mutations)} entries)")
 
     with open(output_path, 'w') as f:
         f.write("##bedFormat=4\n")
-        for m in cmv_mutations:
-            f.write(f"{m['chrom']}\t{m['start']}\t{m['end']}\t{m['label']}\n")
+        for (chrom, start, end), labels in sorted(merged.items(), key=lambda x: (x[0][0], x[0][1])):
+            f.write(f"{chrom}\t{start}\t{end}\t{';'.join(labels)}\n")
 
-    print(f"\nWrote {len(cmv_mutations)} mutations to {output_path}")
-
-    return len(cmv_mutations), unmapped + unparsed
+    print(f"\nWrote {len(merged)} unique positions to {output_path}")
+    return len(merged), unmapped + unparsed + failed_verify
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Build CMV HerpesDRG vcfanno database"
-    )
-    parser.add_argument(
-        '--herpesdrg',
-        required=True,
-        dest='herp',
-        help='Path to herpesdrg-db.tsv'
-    )
-    parser.add_argument(
-        '--genome', '-g',
-        required=True,
-        help='Path to AD169 FASTA genome'
-    )
-    parser.add_argument(
-        '--genbank', '-b',
-        required=True,
-        help='Path to AD169 GenBank annotation'
-    )
-    parser.add_argument(
-        '--output', '-o',
-        required=True,
-        help='Output BED file path'
-    )
-
+    parser = argparse.ArgumentParser(description="Build CMV HerpesDRG vcfanno database")
+    parser.add_argument("--herpesdrg", required=True, help="Path to herpesdrg-db.tsv")
+    parser.add_argument("--genome", required=True, help="Path to AD169 FASTA")
+    parser.add_argument("--genbank", required=True, help="Path to AD169 GenBank annotation")
+    parser.add_argument("--output", default="herpesdrg_cmv.bed", help="Output BED file")
+    parser.add_argument("--genes", nargs='+', default=["UL54","UL97","UL56","UL51","UL27","UL89"])
     args = parser.parse_args()
 
-    target_genes = ["UL97", "UL54", "UL27", "UL56", "UL51", "UL89"]
-    mapped, unmapped = build_database(
-        args.herp,
-        args.genome,
-        args.genbank,
-        args.output,
-        target_genes,
-    )
+    build_database(args.herpesdrg, args.genome, args.genbank, args.output, args.genes)
 
 
 if __name__ == "__main__":

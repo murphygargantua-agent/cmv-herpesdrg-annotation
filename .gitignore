@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.ipynb_checkpoints/
+*.tmp
+data/herpesdrg_cmv_sorted.bed
+data/herpesdrg_cmv.bed.merged
+data/herpesdrg_cmv_merged.bed
+data/AD169.fa
+data/AD169_X17403.gb

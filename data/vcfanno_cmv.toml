@@ -1,5 +1,5 @@
 [[annotation]]
-file = "herpesdrg_cmv.bed.gz"
-fields = ["name"]
+file = "/workspace/projects/cmv-herpesdrg-annotation/data/herpesdrg_cmv.bed.gz"
+columns = [4]
 names = ["cmv_resistance"]
-ops = ["self"]
+ops = ["uniq"]
