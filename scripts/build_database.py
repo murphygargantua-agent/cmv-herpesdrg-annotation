@@ -244,3 +244,82 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def build_refalt_database(input_bed, genome_path, genbank_path, output_path,
+                          target_genes=None):
+    """
+    Build a ref/alt version of the BED file for vcfanno.
+    Adds REF/ALT columns based on the NC_006273.2 reference.
+    """
+    import sys
+    sys.path.insert(0, "/workspace")
+    from add_ref_alt import load_genome, build_codon_table, parse_label, find_alt_codon
+    from Bio.Seq import Seq
+
+    if target_genes is None:
+        target_genes = ["UL54", "UL97", "UL56", "UL51", "UL27", "UL89"]
+
+    genome = load_genome(genome_path)
+    codon_table = build_codon_table(genome, genbank_path, target_genes)
+
+    mutations = []
+    headers = []
+    with open(input_bed) as f:
+        for line in f:
+            if line.startswith("##"):
+                headers.append(line)
+                continue
+            parts = line.strip().split("\t")
+            mutations.append((parts[0], int(parts[1]), int(parts[2]), parts[3]))
+
+    out = []
+    for chrom, start, end, label in mutations:
+        gene = re.match(r"^([A-Z]+[0-9]+)", label.split("|")[0])
+        gene = gene.group(1) if gene else None
+
+        if not gene or gene not in codon_table:
+            out.append(f"{chrom}\t{start}\t{end}\t{label}\t.\t.")
+            continue
+
+        info = codon_table[gene]
+        strand = info["strand"]
+        codons = info["codons"]
+
+        codon_num = None
+        for n, pos in codons.items():
+            if pos == start:
+                codon_num = n
+                break
+        if codon_num is None:
+            out.append(f"{chrom}\t{start}\t{end}\t{label}\t.\t.")
+            continue
+
+        if start + 3 > len(genome):
+            out.append(f"{chrom}\t{start}\t{end}\t{label}\t.\t.")
+            continue
+
+        ref_bases = genome[start:start + 3]
+        parsed = parse_label(label)
+        if parsed is None:
+            out.append(f"{chrom}\t{start}\t{end}\t{label}\t.\t.")
+            continue
+
+        _, ref_aa, pos, mut_aa, _ = parsed
+        if pos != codon_num:
+            out.append(f"{chrom}\t{start}\t{end}\t{label}\t.\t.")
+            continue
+
+        ref_codon = ref_bases if strand == 1 else str(Seq(ref_bases).reverse_complement())
+        alt_codon = find_alt_codon(ref_codon, mut_aa)
+        alt_genomic = alt_codon.upper() if strand == 1 else str(Seq(alt_codon).reverse_complement()).upper()
+
+        out.append(f"{chrom}\t{start}\t{end}\t{label}\t{ref_bases.upper()}\t{alt_genomic}")
+
+    with open(output_path, "w") as f:
+        f.write("##bedFormat=4\n")
+        f.write("##chr\tref\talt\n")
+        for line in out:
+            f.write(line + "\n")
+
+    print(f"Ref/alt database: {output_path}")
