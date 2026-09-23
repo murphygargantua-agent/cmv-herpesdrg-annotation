@@ -1,0 +1,6 @@
+[[annotation]]
+file = "/workspace/projects/cmv-herpesdrg-annotation/test_refalt.bed.gz"
+columns = [4]
+names = ["test_mut"]
+ops = ["uniq"]
+type = "String"

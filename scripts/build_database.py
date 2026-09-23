@@ -163,7 +163,7 @@ def build_database(herpesdrg_path: str, genome_path: str,
         if drug_info:
             label += '|' + ';'.join(drug_info)
 
-        chrom = 'NC_006273'  # AD169 NCBI accession
+        chrom = 'NC_006273.2'  # AD169 NCBI accession (current reference)
         cmv_mutations.append({
             'chrom': chrom,
             'start': genomic_pos,

@@ -1,0 +1,6 @@
+##fileformat=VCFv4.2
+##chromosomes=NC_006273
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+NC_006273	79729	.	A	T	.	.	.
+NC_006273	79731	.	A	G	.	.	.
+NC_006273	79731	.	A	T	.	.	.
