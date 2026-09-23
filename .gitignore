@@ -6,6 +6,7 @@ __pycache__/
 *.tmp
 data/herpesdrg_cmv_sorted.bed
 data/herpesdrg_cmv.bed.merged
-data/herpesdrg_cmv_merged.bed
-data/AD169.fa
+data/AD169.fasta
+data/AD169.gb
 data/AD169_X17403.gb
+test_cmv_herpesdrg.vcf

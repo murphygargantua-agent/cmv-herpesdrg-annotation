@@ -37,13 +37,16 @@ def parse_fasta(path: str) -> str:
 
 def parse_ad169_coordinates(target_genes: list[str], genbank_path: str) -> dict:
     """
-    Parse AD169 GenBank annotation to get gene coordinates.
-    Returns dict mapping gene name to {'start': int, 'end': int}.
+    Parse AD169 GenBank annotation to get CDS codon coordinates.
+    Returns dict mapping gene name to codon-start positions.
+    For forward strand: codon n starts at cds_start + (n-1)*3
+    For reverse strand: codon n starts at cds_end - (n-1)*3
     """
+    from Bio.Seq import Seq
     with open(genbank_path) as f:
         record = SeqIO.read(f, 'genbank')
 
-    gene_coords = {}
+    gene_codon_coords = {}
     for feature in record.features:
         if feature.type == "CDS" and "gene" in feature.qualifiers:
             raw_gene = feature.qualifiers["gene"][0]
@@ -52,20 +55,29 @@ def parse_ad169_coordinates(target_genes: list[str], genbank_path: str) -> dict:
             else:
                 gene_name = raw_gene.split()[0]
 
-            if gene_name in target_genes:
-                start = int(feature.location.start) + 1
-                end = int(feature.location.end)
-                length = end - start + 1
+            if gene_name not in target_genes:
+                continue
 
-                if gene_name not in gene_coords or \
-                   length > gene_coords[gene_name]['end'] - gene_coords[gene_name]['start'] + 1:
-                    gene_coords[gene_name] = {
-                        'start': start,
-                        'end': end,
-                        'length': length
-                    }
+            cds_start = int(feature.location.start)  # 0-based
+            cds_end = int(feature.location.end)      # 1-based
+            strand = feature.location.strand
+            num_codons = (cds_end - cds_start) // 3
 
-    return gene_coords
+            # Build dict: aa_pos -> codon_genomic_start (0-based, first base of codon)
+            codon_map = {}
+            if strand == 1:
+                # Forward strand: codon n starts at cds_start + (n-1)*3
+                for n in range(1, num_codons + 1):
+                    codon_map[n] = cds_start + (n - 1) * 3
+            else:
+                # Reverse strand: codon n starts at cds_end - n*3 (then we use the start as 0-based)
+                for n in range(1, num_codons + 1):
+                    # Codon n (in protein order) on reverse strand occupies [cds_end - n*3, cds_end - (n-1)*3)
+                    codon_map[n] = cds_end - n * 3
+
+            gene_codon_coords[gene_name] = codon_map
+
+    return gene_codon_coords
 
 
 def build_database(herpesdrg_path: str, genome_path: str,
@@ -90,11 +102,12 @@ def build_database(herpesdrg_path: str, genome_path: str,
 
     # Parse gene coordinates
     print("Parsing GenBank annotations...")
-    gene_coords = parse_ad169_coordinates(target_genes, genbank_path)
-    print(f"Found {len(gene_coords)} genes:")
-    for gene in sorted(gene_coords.keys()):
-        coords = gene_coords[gene]
-        print(f"  {gene}: {coords['start']}-{coords['end']} ({coords['length']} bp)")
+    gene_codon_coords = parse_ad169_coordinates(target_genes, genbank_path)
+    print(f"Found {len(gene_codon_coords)} genes:")
+    for gene in sorted(gene_codon_coords.keys()):
+        codons = gene_codon_coords[gene]
+        n_codons = len(codons)
+        print(f"  {gene}: {n_codons} codons")
 
     # Parse HerpesDRG TSV
     print("\nLoading HerpesDRG TSV...")
@@ -126,16 +139,16 @@ def build_database(herpesdrg_path: str, genome_path: str,
         pos = int(match.group(2))
         mut_aa = match.group(3)
 
-        if gene not in gene_coords:
+        if gene not in gene_codon_coords:
             unmapped += 1
             continue
 
-        coords = gene_coords[gene]
-        if pos < 1 or pos > coords['length']:
+        coords = gene_codon_coords[gene]
+        if pos not in coords:
             unmapped += 1
             continue
 
-        genomic_pos = coords['start'] + pos - 1
+        genomic_pos = coords[pos]  # 0-based first base of codon
 
         # Build drug resistance info string
         drug_info = []
@@ -150,7 +163,7 @@ def build_database(herpesdrg_path: str, genome_path: str,
         if drug_info:
             label += '|' + ';'.join(drug_info)
 
-        chrom = '1'  # AD169 uses '1' as chromosome identifier
+        chrom = 'NC_006273'  # AD169 NCBI accession
         cmv_mutations.append({
             'chrom': chrom,
             'start': genomic_pos,
@@ -158,17 +171,35 @@ def build_database(herpesdrg_path: str, genome_path: str,
             'label': label
         })
 
-    # Write BED file
+    # Write BED file, sorted and merged by genomic position
+    from collections import defaultdict
+    merged = defaultdict(list)
+    for m in cmv_mutations:
+        key = (m['chrom'], m['start'], m['end'])
+        merged[key].append(m['label'])
+
+    # Sort by chrom, start, end
+    sorted_keys = sorted(merged.keys(), key=lambda x: (x[0], x[1], x[2]))
+
     print(f"\nMapped: {len(cmv_mutations)}")
     print(f"Unparsed aa_change: {unparsed}")
     print(f"Unmapped: {unmapped}")
+    print(f"Unique genomic positions: {len(merged)}")
 
     with open(output_path, 'w') as f:
         f.write("##bedFormat=4\n")
-        for m in cmv_mutations:
-            f.write(f"{m['chrom']}\t{m['start']}\t{m['end']}\t{m['label']}\n")
+        for key in sorted_keys:
+            chrom, start, end = key
+            # Deduplicate labels
+            unique_labels = []
+            seen = set()
+            for label in merged[key]:
+                if label not in seen:
+                    seen.add(label)
+                    unique_labels.append(label)
+            f.write(f"{chrom}\t{start}\t{end}\t{'|'.join(unique_labels)}\n")
 
-    print(f"\nWrote {len(cmv_mutations)} mutations to {output_path}")
+    print(f"\nWrote {len(sorted_keys)} unique positions to {output_path}")
 
     return len(cmv_mutations), unmapped + unparsed
 
