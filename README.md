@@ -1,3 +1,5 @@
+**DEPRECATED**: This repository has been merged into [charmd-vcfanno-db](https://github.com/murphygargantua-agent/charmd-vcfanno-db), which now contains both HerpesDRG and CHARMD databases with combined benchmark and e2e tests.
+
 # CMV HerpesDRG vcfanno Database
 
 A database of CMV antiviral resistance mutations from HerpesDRG, mapped to AD169/NC_006273.2 coordinates, formatted for vcfanno.
