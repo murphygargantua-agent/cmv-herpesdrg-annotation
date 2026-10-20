@@ -4,6 +4,9 @@
 # Uses NC_006273.2 (current AD169 reference) coordinates
 set -e
 
+# Ensure vcfanno is available (installed in /root/miniconda3/bin, not in minmutfinder env)
+export PATH="/root/miniconda3/bin:$PATH"
+
 # Build database from HerpesDRG TSV
 python3 scripts/build_database.py \
     --herpesdrg data/herpesdrg-db.tsv \
@@ -57,4 +60,5 @@ bcftools sort -Oz -o "$SORTED_VCF" "$INPUT_GZ"
 tabix -p vcf "$SORTED_VCF"
 
 # Annotate VCF with ref/alt BED (base-level matching)
-vcfanno -p 1 data/vcfanno_cmv_refalt.toml "$SORTED_VCF" > output.vcf
+# -permissive-overlap: annotate even when REF/ALT differs from BED (handles 7.8% AD169 vs Merlin strain differences)
+vcfanno -p 1 -permissive-overlap data/vcfanno_cmv_refalt.toml "$SORTED_VCF" > output.vcf
