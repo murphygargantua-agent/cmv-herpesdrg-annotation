@@ -4,8 +4,9 @@
 # Uses NC_006273.2 (current AD169 reference) coordinates
 set -e
 
-# Ensure vcfanno is available (installed in /root/miniconda3/bin, not in minmutfinder env)
-export PATH="/root/miniconda3/bin:$PATH"
+# Ensure vcfanno is available (installed in /root/miniconda3/bin)
+# and minmutfinder env Python (with pysam) takes precedence
+export PATH="/root/miniconda3/envs/minmutfinder/bin:/root/miniconda3/bin:$PATH"
 
 # Build database from HerpesDRG TSV
 python3 scripts/build_database.py \
