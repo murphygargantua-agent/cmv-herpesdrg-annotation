@@ -16,3 +16,10 @@ data/vcfanno_cmv_refalt_withheader.toml
 data/herpesdrg_cmv_refalt_norefalt.bed*
 data/herpesdrg_cmv_refalt_ordered.bed*
 data/herpesdrg_cmv_refalt_withrefalt.bed*
+data/CMV_resistance_mutations.db
+data/*.fa.amb
+data/*.fa.ann
+data/*.fa.bwt
+data/*.fa.fai
+data/*.fa.pac
+data/*.fa.sa
