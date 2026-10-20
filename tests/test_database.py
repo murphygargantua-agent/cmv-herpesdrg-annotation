@@ -46,8 +46,6 @@ def test_has_ul27_r448p():
         if "UL27_R448P" in line:
             found = True
             parts = line.rstrip().split("\t")
-            # R448P is at position 33664-33665 in the original BED
-            # Verify it has 6 columns
             assert len(parts) == 6, f"Expected 6 columns, got {len(parts)}"
     assert found, "UL27_R448P not found"
 
@@ -78,6 +76,24 @@ def test_positions_in_nc_006273():
     assert max_pos < 235646, f"Position {max_pos} exceeds genome length"
 
 
+def test_bed_sorted():
+    """Test that the BED file is sorted by position (required by vcfanno)."""
+    tb = pysam.TabixFile("data/herpesdrg_cmv_refalt.bed.gz")
+    starts = []
+    for line in tb.fetch("NC_006273.2", 0, 235646):
+        starts.append(int(line.split("\t")[1]))
+    assert starts == sorted(starts), "BED file is not sorted by position"
+    assert len(set(starts)) == len(starts), "BED file has duplicate start positions"
+
+
+def test_toml_relative_path():
+    """Test that the TOML config uses relative paths (not hardcoded /workspace/projects)."""
+    with open("data/vcfanno_cmv_refalt.toml", "r") as f:
+        content = f.read()
+    assert "/workspace/projects/" not in content, "TOML should not have hardcoded absolute path"
+    assert "herpesdrg_cmv_refalt.bed.gz" in content, "TOML should reference the BED file"
+
+
 def test():
     tests = [
         test_bed_gz_exists,
@@ -89,6 +105,8 @@ def test():
         test_refalt_header,
         test_refalt_columns,
         test_positions_in_nc_006273,
+        test_bed_sorted,
+        test_toml_relative_path,
     ]
     for test in tests:
         try:
