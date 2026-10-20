@@ -105,6 +105,54 @@ python3 tests/test_e2e_benchmark.py
 - For e2e validation with bcftools variant calling, 3bp-spanning BED intervals are used (bcftools calls variants at any codon position)
 - The `-permissive-overlap` flag handles strain differences (AD169 vs Merlin)
 
+
+## Usage: CMV NGS Pipeline
+
+### Recommended Pipeline
+```
+FASTp (QC) → BWA-MEM2 (map to NC_006273.2) → FreeBayes (VCF) → vcfanno (annotate)
+```
+
+### Step-by-step commands
+```bash
+# 1. QC with FASTp
+fastp -i reads_R1.fastq.gz -I reads_R2.fastq.gz -o trimmed_R1.fastq.gz -O trimmed_R2.fastq.gz
+
+# 2. Index reference (if not already done)
+bwa-mem2 index data/AD169_NC_006273.2.fa
+
+# 3. Align with BWA-MEM2
+bwa-mem2 mem -t 4 data/AD169_NC_006273.2.fa trimmed_R1.fastq.gz trimmed_R2.fastq.gz |     samtools sort -o aligned.bam
+
+# 4. Index BAM
+samtools index aligned.bam
+
+# 5. Call variants with FreeBayes (or bcftools)
+freebayes -f data/AD169_NC_006273.2.fa aligned.bam > variants.vcf
+# OR with bcftools:
+# bcftools mpileup -f data/AD169_NC_006273.2.fa -Ou aligned.bam | bcftools call -mv -Oz -o variants.vcf.gz
+
+# 6. Sort and index VCF (required for vcfanno)
+bcftools sort -Oz -o variants.sorted.vcf.gz variants.vcf
+tabix -p vcf variants.sorted.vcf.gz
+
+# 7. Annotate with vcfanno
+vcfanno -p 1 -permissive-overlap data/vcfanno_cmv_refalt.toml variants.sorted.vcf.gz > annotated.vcf
+```
+
+### Key Files
+- **Reference genome**: `data/AD169_NC_006273.2.fa` (NC_006273.2, 235,646 bp)
+- **BED database**: `data/herpesdrg_cmv_refalt.bed.gz` (bgzipped + tabix-indexed)
+- **vcfanno config**: `data/vcfanno_cmv_refalt.toml`
+- **vcfanno binary**: v0.3.9+ (https://github.com/brentp/vcfanno/releases/download/v0.3.9/vcfanno_0.3.9_linux_amd64.zip)
+
+### Critical Requirements
+1. VCF must be sorted by position (5'→3') and tabix-indexed
+2. BED must be bgzipped + tabix-indexed with unique interval starts
+3. Chromosome names must match: `NC_006273.2`
+4. Use `-permissive-overlap` flag (handles strain differences)
+5. vcfanno config uses `columns = [4]` and `ops = ["uniq"]`
+
 ## AI Disclosure
 
 This repository was developed with assistance from an AI coding agent (Hermes Agent by Nous Research).
