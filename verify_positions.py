@@ -35,8 +35,8 @@ def main():
     mismatches = []
     total = 0
     with open(args.bed) as f:
-        f.readline()
-        for line in f.readline():
+        f.readline()  # skip header line
+        for line in f:
             parts = line.rstrip().split("\t")
             if len(parts) < 6:
                 continue
