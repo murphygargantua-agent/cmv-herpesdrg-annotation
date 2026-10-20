@@ -1,25 +1,17 @@
+# Generated files
+*.tbi
+*.bwt
+*.pac
+*.sa
+*.ann
+*.amb
+*.fai
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 *.egg-info/
-.ipynb_checkpoints/
-*.tmp
-data/AD169_NC_006273.2.gb
-data/AD169_NC_006273.2.fa
-data/herpesdrg-db.tsv
-data/test_cmv*.vcf
-data/vcfanno_cmv_plain.toml
-data/vcfanno_cmv_work.toml
-data/vcfanno_cmv_refalt_noheader.toml
-data/vcfanno_cmv_refalt_ordered.toml
-data/vcfanno_cmv_refalt_withheader.toml
-data/herpesdrg_cmv_refalt_norefalt.bed*
-data/herpesdrg_cmv_refalt_ordered.bed*
-data/herpesdrg_cmv_refalt_withrefalt.bed*
+# ARUP database (external, large)
 data/CMV_resistance_mutations.db
-data/*.fa.amb
-data/*.fa.ann
-data/*.fa.bwt
-data/*.fa.fai
-data/*.fa.pac
-data/*.fa.sa
+# Browser snapshot cache
+references/
