@@ -98,7 +98,6 @@ def create_synthetic_reads(mutations, ref_path, n_reads=5000, read_len=150):
     ref_str_mutated = ''.join(ref_list)
     reads = []
 
-    # 50 reads covering each mutation position
     for m in selected:
         key = f"{m['gene']}|{m['variant']}"
         bed = bed_positions[key]
@@ -108,7 +107,6 @@ def create_synthetic_reads(mutations, ref_path, n_reads=5000, read_len=150):
             if len(read) == read_len:
                 reads.append(read)
 
-    # Background reads
     random.seed(42)
     n_background = n_reads - len(reads)
     for _ in range(n_background):
@@ -124,14 +122,20 @@ def create_synthetic_reads(mutations, ref_path, n_reads=5000, read_len=150):
     return selected, fastq_path
 
 
+def ensure_bed_indexed():
+    expanded_bed = EXPANDED_BED.replace('.gz', '')
+    if not os.path.exists(EXPANDED_BED):
+        subprocess.run(["bgzip", "-f", expanded_bed], capture_output=True, check=True)
+    tbi_path = EXPANDED_BED + '.tbi'
+    if os.path.exists(tbi_path):
+        os.remove(tbi_path)
+    subprocess.run(["tabix", "-p", "bed", EXPANDED_BED],
+                   capture_output=True, check=True)
+
+
 def run_alignment(fastq_path, ref_path, bam_path):
     subprocess.run(["bwa", "index", ref_path], capture_output=True, check=True)
-    # Ensure expanded BED is indexed
-    expanded_bed = EXPANDED_BED.replace('.gz', '')
-    if not os.path.exists(expanded_bed + '.gz'):
-        subprocess.run(["bgzip", "-f", expanded_bed], capture_output=True, check=True)
-    subprocess.run(["tabix", "-p", "bed", expanded_bed + '.gz'],
-                   capture_output=True, check=True)
+    ensure_bed_indexed()
     sam_path = OUTPUT_DIR / "e2e_test.sam"
     with open(str(sam_path), 'w') as f:
         subprocess.run(["bwa", "mem", "-t", "4", ref_path, fastq_path],
@@ -204,7 +208,38 @@ def evaluate_e2e(benchmark_mutations, annotated_path):
     }
 
 
-def main():
+@pytest.mark.slow
+def test_e2e_full_pipeline():
+    """Test the full e2e pipeline: synthetic reads -> BWA -> bcftools -> vcfanno."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    arup_mutations = load_arup_mutations()
+
+    bed_positions = load_bed_positions()
+    gene_mutations = {}
+    for m in arup_mutations:
+        key = f"{m['gene']}|{m['variant']}"
+        if key in bed_positions:
+            gene_mutations.setdefault(m['gene'], []).append(m)
+    selected = []
+    for gene in sorted(gene_mutations.keys()):
+        selected.extend(gene_mutations[gene][:5])
+
+    n_reads = 5000
+    selected, fastq_path = create_synthetic_reads(selected, REF_PATH, n_reads)
+    bam_path = OUTPUT_DIR / "e2e_test.bam"
+    vcf_path = OUTPUT_DIR / "e2e_test.vcf.gz"
+    annotated_path = OUTPUT_DIR / "e2e_annotated.vcf"
+
+    run_alignment(fastq_path, REF_PATH, bam_path)
+    run_variant_calling(bam_path, vcf_path)
+    run_vcfanno(vcf_path, annotated_path)
+
+    results = evaluate_e2e(selected, annotated_path)
+    assert results['match_rate'] == 100.0, f"Expected 100% match rate, got {results['match_rate']:.1f}%"
+    assert results['matched'] == 26, f"Expected 26 matched, got {results['matched']}"
+
+
+if __name__ == '__main__':
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     arup_mutations = load_arup_mutations()
     print(f"ARUP mutations: {len(arup_mutations)}")
@@ -249,7 +284,3 @@ def main():
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"Results saved to: {results_path}")
-
-
-if __name__ == '__main__':
-    main()
