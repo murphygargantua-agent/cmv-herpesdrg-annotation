@@ -108,6 +108,6 @@ python3 tests/test_e2e_benchmark.py
 ## AI Disclosure
 
 This repository was developed with assistance from an AI coding agent (Hermes Agent by Nous Research).
-All code, documentation, and database entries were reviewed and validated by the human maintainer.
+All code, documentation, and database entries were generated with AI assistance.
 Benchmark data was sourced from published databases (ARUPCMVResistanceCaller) and peer-reviewed
 literature (Mallory et al. 2023, Streck et al. 2023). No fabricated data was used.
